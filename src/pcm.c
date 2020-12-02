@@ -47,7 +47,7 @@ u16 read_pcm(int16_t *buff, uint16_t frames)
             cpsrcbuf = (int16_t *)((bufidx == 1 ? sairecbuf1 : sairecbuf2)) + bufpos; // 一会要从哪个地址开始读
             for (i = 0; i < translen; i++)
             {
-                *(buff + i) = *(cpsrcbuf + (i * 2) + 1);
+                *(buff + i) = (*(cpsrcbuf + (i * 2) + 1)) + 140; // 采集到的数据大概有-140的直流量
             }
         }
 

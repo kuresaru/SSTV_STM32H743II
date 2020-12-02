@@ -31,13 +31,13 @@ int main()
     WM8978_ADDA_Cfg(0, 1);     //开启ADC
     WM8978_Input_Cfg(1, 1, 0); //开启输入通道(MIC&LINE IN)
     WM8978_Output_Cfg(0, 1);   //开启BYPASS输出
-    WM8978_MIC_Gain(46);       //MIC增益设置
+    WM8978_MIC_Gain(20);       //MIC增益设置
     WM8978_SPKvol_Set(0);      //关闭喇叭.
     WM8978_I2S_Cfg(2, 0);      //飞利浦标准,16位数据长度
 
     SAIA_Init(0, 1, 4);                                                 //SAI1 Block A,主发送,16位数据
     SAIB_Init(3, 1, 4);                                                 //SAI1 Block B从模式接收,16位
-    SAIA_SampleRate_Set(8000);                                          //设置采样率
+    SAIA_SampleRate_Set(16000);                                          //设置采样率
     SAIA_TX_DMA_Init((u8 *)&saiplaybuf[0], (u8 *)&saiplaybuf[1], 1, 1); //配置TX DMA,16位
     SAIB_RX_DMA_Init();   //配置RX DMA
     SAI_Play_Start();                                                   //开始SAI数据发送(主机)

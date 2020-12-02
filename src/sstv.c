@@ -7,12 +7,11 @@
 #include "delay.h"
 #include "lcd.h"
 
-#define SAMPLE_RATE 8000
-#define SAMPLE_10MS_CNT 80       // 8000Hz * 0.01s = 80Sa
+#define SAMPLE_RATE 16000
+#define SAMPLE_10MS_CNT 160       // 8000Hz * 0.01s = 80Sa
 #define NPT 1024                 // 16 64 256 1024 4096
-#define SAMPLE_FREQ_RES 7.8125
-// #define NPT 4096                 // 16 64 256 1024 4096
-// #define SAMPLE_FREQ_RES 1.953125
+// #define SAMPLE_FREQ_RES 7.8125
+#define SAMPLE_FREQ_RES 15.625
 
 #define hann(n, N) (0.5 * (1.0 - arm_cos_f32(2.0 * PI * (n) / ((N)-1.0))))
 #define freq2lum(f) (round(((f) - 1500.0) / 3.1372549))
@@ -193,7 +192,7 @@ static void decode_matin1()
     const float32_t SYNC_PORCH = 0.000572;
     const float32_t SEP_PULSE = 0.000572;
     const uint16_t CHAN_COUNT = 3;
-    const uint16_t CHAN_TIME = SEP_PULSE + SCAN_TIME;
+    const float32_t CHAN_TIME = SEP_PULSE + SCAN_TIME;
     const float32_t LINE_TIME = SYNC_PULSE + SYNC_PORCH + 3 * CHAN_TIME;
     const float32_t PIXEL_TIME = SCAN_TIME / LINE_WIDTH;
     const float32_t WINDOW_FACTOR = 2.34;
@@ -207,7 +206,7 @@ static void decode_matin1()
     uint8_t pixel_window_sa = (uint8_t)round(centre_window_time * 2 * SAMPLE_RATE);
 
     uint64_t samples_read = 0;
-    uint64_t seq_start_sa;
+    uint64_t seq_start_sa = 0;
     uint16_t line, chan, px;
     uint16_t i16, ifreq;
     float32_t freq, vol;
@@ -228,13 +227,14 @@ static void decode_matin1()
         printf("l%d\r\n", line);
         for (chan = 0; chan < CHAN_COUNT; chan++)
         {
-            if ((chan == 0))
+            if ((0 == chan) && (line > 0))
             {
-                seq_start_sa = (uint64_t)round(LINE_TIME * line * SAMPLE_RATE);
+                seq_start_sa = (uint64_t)round(line * LINE_TIME * SAMPLE_RATE);
             }
             for (px = 0; px < LINE_WIDTH; px++)
             {
                 uint64_t px_pos_sa = (uint64_t)round(seq_start_sa + (CHAN_OFFSETS[chan] + px * PIXEL_TIME - centre_window_time) * SAMPLE_RATE);
+                // printf("l%dc%dp%d %d-%d\n", line, chan, px, (int)px_pos_sa, (int)px_pos_sa + pixel_window_sa);
                 // 需要计算的数据
                 int8_t start_offset_sa = px_pos_sa - samples_read; // 偏移量 正数需要跳过数据 负数需要倒回数据
                 uint8_t newread_sa;
@@ -273,14 +273,14 @@ static void decode_matin1()
                 }
                 // for (i16 = 0; i16 < NPT; i16++)
                 // {
-                //     // sInput[i16] = hann(i16, NPT) * buf10ms[i16 % pixel_window_sa];
-                //     sInput[i16] = buf10ms[i16 % pixel_window_sa];
+                //     sInput[i16] = hann(i16, NPT) * buf10ms[i16 % pixel_window_sa];
+                //     // sInput[i16] = buf10ms[i16 % pixel_window_sa];
                 // }
                 // fft计算
                 arm_rfft_fast_f32(&S, sInput, sOutput, 0);
                 arm_cmplx_mag_f32(sOutput, fftOutput, NPT);
                 // 找音量最高的频率
-                find_fft_peak_ranged(192, 294, &ifreq, &vol); // 在这限制频率为1500Hz~2296.875Hz
+                find_fft_peak_ranged(96, 147, &ifreq, &vol); // 在这限制频率为1500Hz~2296.875Hz
                 freq = SAMPLE_FREQ_RES * ifreq;
 
                 // 计算颜色值并写入缓冲区
@@ -301,6 +301,7 @@ static void decode_matin1()
                 }
             }
         }
+        // if (line == 1) { return; }
         // 当前行颜色写入屏幕
         for (i16 = 0; i16 < LINE_WIDTH; i16++)
         {
