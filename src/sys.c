@@ -312,7 +312,7 @@ void Stm32_Clock_Init()
 	//操作地址的方式,来修改,该寄存器在<<STM32H7xx参考手册>>第119页,table 5
 	*((vu32 *)0x51008108) = 0x00000001;	   //设置AXI SRAM的矩阵读取能力为1
 	Cache_Enable();						   //使能L1 Cache
-	Sys_Clock_Set(192, 5, 2, 4); //设置时钟
+	Sys_Clock_Set(160, 5, 2, 4); //设置时钟
 										   //配置向量表
 #ifdef VECT_TAB_RAM
 	MY_NVIC_SetVectorTable(D1_AXISRAM_BASE, 0x0);

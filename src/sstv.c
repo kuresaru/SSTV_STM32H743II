@@ -69,7 +69,6 @@ static void read_10ms_fft_peak_freq(float32_t *freq, float32_t *vol)
         sInput[i] = hann(i, SAMPLE_10MS_CNT) * buf10ms[i];
     }
     // 剩余填0
-    // TODO 是不是可以放外边 不要每次都重新填
     for (i = SAMPLE_10MS_CNT; i < NPT; i++)
     {
         sInput[i] = 0;
@@ -179,8 +178,40 @@ static u8 read_mode()
         printf("mode parity check error\r\n");
         return 0;
     }
-    // 接收成功
+    // 接收成功 跳过30ms
+    read_pcm(buf10ms, SAMPLE_10MS_CNT);
+    read_pcm(buf10ms, SAMPLE_10MS_CNT);
+    read_pcm(buf10ms, SAMPLE_10MS_CNT);
+    // 返回结果
     return tmp & 0x7F;
+}
+
+static void read_samples(uint64_t *samples_read, uint64_t pos_sa, uint16_t samples_cnt)
+{
+    int8_t start_offset_sa = pos_sa - *samples_read; // 偏移量 正数需要跳过数据 负数需要倒回数据
+    uint8_t newread_sa;
+    uint8_t newread_offset;
+    if (start_offset_sa >= 0)
+    {
+        // 跳过采样
+        read_pcm(0, start_offset_sa);
+        *samples_read += start_offset_sa;
+        newread_sa = samples_cnt;
+        newread_offset = 0;
+    }
+    else
+    {
+        // start_offset_sa是负数
+        // 使用上一次最后几个采样
+        for (uint16_t i16 = 0; i16 < (-start_offset_sa); i16++)
+        {
+            buf10ms[i16] = buf10ms[samples_cnt + start_offset_sa + i16];
+        }
+        newread_sa = samples_cnt + start_offset_sa;
+        newread_offset = (-start_offset_sa);
+    }
+    read_pcm(buf10ms + newread_offset, newread_sa);
+    *samples_read += newread_sa;
 }
 
 static void decode_matin1()
@@ -211,12 +242,6 @@ static void decode_matin1()
     uint16_t i16, ifreq;
     float32_t freq, vol;
 
-    // 后边不需要的参数填0
-    // for (i16 = pixel_window_sa; i16 < NPT; i16++)
-    // {
-    //     sInput[i16] = 0;
-    // }
-
     // 屏幕准备写入
     lcd_set_window(0, 0, LINE_WIDTH - 1, LINE_COUNT - 1);
     LCD_WriteRAM_Prepare();
@@ -227,55 +252,64 @@ static void decode_matin1()
         printf("l%d\r\n", line);
         for (chan = 0; chan < CHAN_COUNT; chan++)
         {
-            if ((0 == chan) && (line > 0))
+            if (0 == chan)
             {
-                seq_start_sa = (uint64_t)round(line * LINE_TIME * SAMPLE_RATE);
+                if (line > 0)
+                {
+                    seq_start_sa = (uint64_t)round(line * LINE_TIME * SAMPLE_RATE);
+                }
+                // wait sync
+                // TODO hsync
+                // uint16_t sync_window_sa = (uint16_t)round(SYNC_PULSE * 1.4 * SAMPLE_RATE); // =108.9088
+                // uint16_t si;
+                // for (si = 0; si < 2000; si++)
+                // {
+                //     uint64_t sync_pos_sa = (uint64_t)round(seq_start_sa + (CHAN_OFFSETS[chan] + si * PIXEL_TIME - centre_window_time) * SAMPLE_RATE);
+                //     read_samples(&samples_read, sync_pos_sa, sync_window_sa);
+                //     // 填充采样
+                //     for (i16 = 0; i16 < sync_window_sa; i16++)
+                //     {
+                //         sInput[i16] = hann(i16, sync_window_sa) * buf10ms[i16];
+                //     }
+                //     for (i16 = sync_window_sa; i16 < NPT; i16++)
+                //     {
+                //         sInput[i16] = 0;
+                //     }
+                //     // fft计算
+                //     arm_rfft_fast_f32(&S, sInput, sOutput, 0);
+                //     arm_cmplx_mag_f32(sOutput, fftOutput, NPT);
+                //     // 找音量最高的频率
+                //     find_fft_peak_ranged(96, 147, &ifreq, &vol); // 在这限制频率为1500Hz~2296.875Hz
+                //     freq = SAMPLE_FREQ_RES * ifreq;
+                //     if (freq > 1350)
+                //     {
+                //         break;
+                //     }
+                // }
+                // if (si == 2000)
+                // {
+                //     printf("not sync\n");
+                //     return;
+                // }
+                // seq_start_sa = ((samples_read - sync_window_sa) + (sync_window_sa / 2)) - (uint64_t)round(SYNC_PULSE * SAMPLE_RATE);
             }
             for (px = 0; px < LINE_WIDTH; px++)
             {
                 uint64_t px_pos_sa = (uint64_t)round(seq_start_sa + (CHAN_OFFSETS[chan] + px * PIXEL_TIME - centre_window_time) * SAMPLE_RATE);
                 // printf("l%dc%dp%d %d-%d\n", line, chan, px, (int)px_pos_sa, (int)px_pos_sa + pixel_window_sa);
-                // 需要计算的数据
-                int8_t start_offset_sa = px_pos_sa - samples_read; // 偏移量 正数需要跳过数据 负数需要倒回数据
-                uint8_t newread_sa;
-                uint8_t newread_offset;
-                if (start_offset_sa >= 0)
-                {
-                    // 跳过采样
-                    read_pcm(0, start_offset_sa);
-                    samples_read += start_offset_sa;
-                    newread_sa = pixel_window_sa;
-                    newread_offset = 0;
-                }
-                else
-                {
-                    // start_offset_sa是负数
-                    // 使用上一次最后几个采样
-                    for (i16 = 0; i16 < (-start_offset_sa); i16++)
-                    {
-                        buf10ms[i16] = buf10ms[pixel_window_sa + start_offset_sa + i16];
-                    }
-                    newread_sa = pixel_window_sa + start_offset_sa;
-                    newread_offset = (-start_offset_sa);
-                }
-                read_pcm(buf10ms + newread_offset, newread_sa);
-                samples_read += newread_sa;
+
+                read_samples(&samples_read, px_pos_sa, pixel_window_sa);
 
                 // 填充采样
-                uint16_t i16t = pixel_window_sa * 2;
-                for (i16 = 0; i16 < i16t; i16++)
+                for (i16 = 0; i16 < pixel_window_sa; i16++)
                 {
-                    sInput[i16] = hann(i16, i16t) * buf10ms[i16];
+                    sInput[i16] = hann(i16, pixel_window_sa) * buf10ms[i16 % pixel_window_sa];
                 }
-                for (i16 = i16t; i16 < NPT; i16++)
+                for (i16 = pixel_window_sa; i16 < NPT; i16++)
                 {
                     sInput[i16] = 0;
                 }
-                // for (i16 = 0; i16 < NPT; i16++)
-                // {
-                //     sInput[i16] = hann(i16, NPT) * buf10ms[i16 % pixel_window_sa];
-                //     // sInput[i16] = buf10ms[i16 % pixel_window_sa];
-                // }
+
                 // fft计算
                 arm_rfft_fast_f32(&S, sInput, sOutput, 0);
                 arm_cmplx_mag_f32(sOutput, fftOutput, NPT);

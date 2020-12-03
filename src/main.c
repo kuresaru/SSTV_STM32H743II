@@ -15,8 +15,8 @@ int main()
 {
     Stm32_Clock_Init();
     SCB->CPACR |= 0b1111 << 20; // enable fpu
-    delay_init(480);
-    uart_init(120, 115200);
+    delay_init(400);
+    uart_init(100, 115200);
     MPU_Memory_Protection();
     lcd_init();
 
