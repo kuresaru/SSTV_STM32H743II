@@ -8,10 +8,12 @@
 #include "lcd.h"
 
 #define SAMPLE_RATE 16000
-#define SAMPLE_10MS_CNT 160       // 8000Hz * 0.01s = 80Sa
+#define SAMPLE_10MS_CNT 160
+#define BUF40MS_SIZE (SAMPLE_10MS_CNT * 4)
 #define NPT 1024                 // 16 64 256 1024 4096
 // #define SAMPLE_FREQ_RES 7.8125
 #define SAMPLE_FREQ_RES 15.625
+#define ifreq2freq(x) ((x) * SAMPLE_FREQ_RES)
 
 #define hann(n, N) (0.5 * (1.0 - arm_cos_f32(2.0 * PI * (n) / ((N)-1.0))))
 #define freq2lum(f) (round(((f) - 1500.0) / 3.1372549))
@@ -31,11 +33,9 @@ float32_t sInput[NPT];
 float32_t sOutput[NPT];
 float32_t fftOutput[NPT];
 
-int16_t buf10ms[SAMPLE_10MS_CNT];
+int16_t buf40ms[BUF40MS_SIZE];
 
 uint16_t line_rgb_buf1[320] __attribute__((section(".memd1base")));
-// uint16_t line_rgb_buf2[320] __attribute__((section(".memd1base")));
-// u8 line_rgb_bufidx = 0;
 
 // 找一个频率范围里音量最大的频率
 static void find_fft_peak_ranged(u16 min, u16 max, u16 *ifreq, float32_t *vol)
@@ -54,31 +54,68 @@ static void find_fft_peak_ranged(u16 min, u16 max, u16 *ifreq, float32_t *vol)
     }
 }
 
+static uint64_t samples_read = 0;
+static uint16_t last_samples_cnt = BUF40MS_SIZE;
+static void read_samples(uint64_t pos_sa, uint16_t samples_cnt)
+{
+    int8_t start_offset_sa = pos_sa - samples_read; // 偏移量 正数需要跳过数据 负数需要倒回数据
+    uint8_t newread_sa;
+    uint8_t newread_offset;
+    if (start_offset_sa >= 0)
+    {
+        // 跳过采样
+        read_pcm(0, start_offset_sa);
+        samples_read += start_offset_sa;
+        newread_sa = samples_cnt;
+        newread_offset = 0;
+    }
+    else
+    {
+        // start_offset_sa是负数
+        // 使用上一次最后几个采样
+        for (uint16_t i16 = 0; i16 < (-start_offset_sa); i16++)
+        {
+            buf40ms[i16] = buf40ms[last_samples_cnt + start_offset_sa + i16];
+        }
+        newread_sa = samples_cnt + start_offset_sa;
+        newread_offset = (-start_offset_sa);
+    }
+    read_pcm(buf40ms + newread_offset, newread_sa);
+    samples_read += newread_sa;
+    last_samples_cnt = samples_cnt;
+}
+
+static void fill_and_fft(uint16_t len)
+{
+    uint16_t i16;
+    // 填充采样
+    for (i16 = 0; i16 < len; i16++)
+    {
+        sInput[i16] = hann(i16, len) * buf40ms[i16];
+    }
+    for (i16 = len; i16 < NPT; i16++)
+    {
+        sInput[i16] = 0;
+    }
+    // fft计算
+    arm_rfft_fast_f32(&S, sInput, sOutput, 0);
+    arm_cmplx_mag_f32(sOutput, fftOutput, NPT);
+
+}
+
 // 找10ms音量最高的频率
 static void read_10ms_fft_peak_freq(float32_t *freq, float32_t *vol)
 {
     const u16 minth = 600 / SAMPLE_FREQ_RES;
     const u16 maxth = (NPT / 2) - 1;
-    u16 i;
     u16 ifreq;
     // 读10ms采样
-    read_pcm(buf10ms, SAMPLE_10MS_CNT);
-    // 填充10ms采样
-    for (i = 0; i < SAMPLE_10MS_CNT; i++)
-    {
-        sInput[i] = hann(i, SAMPLE_10MS_CNT) * buf10ms[i];
-    }
-    // 剩余填0
-    for (i = SAMPLE_10MS_CNT; i < NPT; i++)
-    {
-        sInput[i] = 0;
-    }
-    // fft计算
-    arm_rfft_fast_f32(&S, sInput, sOutput, 0);
-    arm_cmplx_mag_f32(sOutput, fftOutput, NPT);
+    read_pcm(buf40ms, SAMPLE_10MS_CNT);
+    // 填充10ms采样 fft计算
+    fill_and_fft(SAMPLE_10MS_CNT);
     // 找音量最高的频率
     find_fft_peak_ranged(minth, maxth, &ifreq, vol);
-    *freq = SAMPLE_FREQ_RES * ifreq;
+    *freq = ifreq2freq(ifreq);
 }
 
 // 找信号头
@@ -179,39 +216,9 @@ static u8 read_mode()
         return 0;
     }
     // 接收成功 跳过30ms
-    read_pcm(buf10ms, SAMPLE_10MS_CNT);
-    read_pcm(buf10ms, SAMPLE_10MS_CNT);
-    read_pcm(buf10ms, SAMPLE_10MS_CNT);
+    read_samples(0, SAMPLE_10MS_CNT * 3);
     // 返回结果
     return tmp & 0x7F;
-}
-
-static void read_samples(uint64_t *samples_read, uint64_t pos_sa, uint16_t samples_cnt)
-{
-    int8_t start_offset_sa = pos_sa - *samples_read; // 偏移量 正数需要跳过数据 负数需要倒回数据
-    uint8_t newread_sa;
-    uint8_t newread_offset;
-    if (start_offset_sa >= 0)
-    {
-        // 跳过采样
-        read_pcm(0, start_offset_sa);
-        *samples_read += start_offset_sa;
-        newread_sa = samples_cnt;
-        newread_offset = 0;
-    }
-    else
-    {
-        // start_offset_sa是负数
-        // 使用上一次最后几个采样
-        for (uint16_t i16 = 0; i16 < (-start_offset_sa); i16++)
-        {
-            buf10ms[i16] = buf10ms[samples_cnt + start_offset_sa + i16];
-        }
-        newread_sa = samples_cnt + start_offset_sa;
-        newread_offset = (-start_offset_sa);
-    }
-    read_pcm(buf10ms + newread_offset, newread_sa);
-    *samples_read += newread_sa;
 }
 
 static void decode_matin1()
@@ -236,7 +243,6 @@ static void decode_matin1()
 
     uint8_t pixel_window_sa = (uint8_t)round(centre_window_time * 2 * SAMPLE_RATE);
 
-    uint64_t samples_read = 0;
     uint64_t seq_start_sa = 0;
     uint16_t line, chan, px;
     uint16_t i16, ifreq;
@@ -247,6 +253,9 @@ static void decode_matin1()
     LCD_WriteRAM_Prepare();
 
     // 开始解码
+    read_samples(samples_read, SAMPLE_10MS_CNT * 3);
+    // seq_start_sa = samples_read;
+    // float32_t seq_start_fsa = seq_start_sa;
     for (line = 0; line < LINE_COUNT; line++)
     {
         printf("l%d\r\n", line);
@@ -254,68 +263,22 @@ static void decode_matin1()
         {
             if (0 == chan)
             {
+                // set start
                 if (line > 0)
                 {
-                    seq_start_sa = (uint64_t)round(line * LINE_TIME * SAMPLE_RATE);
+                    seq_start_sa += (uint64_t)round(LINE_TIME * SAMPLE_RATE);
                 }
-                // wait sync
                 // TODO hsync
-                // uint16_t sync_window_sa = (uint16_t)round(SYNC_PULSE * 1.4 * SAMPLE_RATE); // =108.9088
-                // uint16_t si;
-                // for (si = 0; si < 2000; si++)
-                // {
-                //     uint64_t sync_pos_sa = (uint64_t)round(seq_start_sa + (CHAN_OFFSETS[chan] + si * PIXEL_TIME - centre_window_time) * SAMPLE_RATE);
-                //     read_samples(&samples_read, sync_pos_sa, sync_window_sa);
-                //     // 填充采样
-                //     for (i16 = 0; i16 < sync_window_sa; i16++)
-                //     {
-                //         sInput[i16] = hann(i16, sync_window_sa) * buf10ms[i16];
-                //     }
-                //     for (i16 = sync_window_sa; i16 < NPT; i16++)
-                //     {
-                //         sInput[i16] = 0;
-                //     }
-                //     // fft计算
-                //     arm_rfft_fast_f32(&S, sInput, sOutput, 0);
-                //     arm_cmplx_mag_f32(sOutput, fftOutput, NPT);
-                //     // 找音量最高的频率
-                //     find_fft_peak_ranged(96, 147, &ifreq, &vol); // 在这限制频率为1500Hz~2296.875Hz
-                //     freq = SAMPLE_FREQ_RES * ifreq;
-                //     if (freq > 1350)
-                //     {
-                //         break;
-                //     }
-                // }
-                // if (si == 2000)
-                // {
-                //     printf("not sync\n");
-                //     return;
-                // }
-                // seq_start_sa = ((samples_read - sync_window_sa) + (sync_window_sa / 2)) - (uint64_t)round(SYNC_PULSE * SAMPLE_RATE);
             }
             for (px = 0; px < LINE_WIDTH; px++)
             {
                 uint64_t px_pos_sa = (uint64_t)round(seq_start_sa + (CHAN_OFFSETS[chan] + px * PIXEL_TIME - centre_window_time) * SAMPLE_RATE);
                 // printf("l%dc%dp%d %d-%d\n", line, chan, px, (int)px_pos_sa, (int)px_pos_sa + pixel_window_sa);
 
-                read_samples(&samples_read, px_pos_sa, pixel_window_sa);
-
-                // 填充采样
-                for (i16 = 0; i16 < pixel_window_sa; i16++)
-                {
-                    sInput[i16] = hann(i16, pixel_window_sa) * buf10ms[i16 % pixel_window_sa];
-                }
-                for (i16 = pixel_window_sa; i16 < NPT; i16++)
-                {
-                    sInput[i16] = 0;
-                }
-
-                // fft计算
-                arm_rfft_fast_f32(&S, sInput, sOutput, 0);
-                arm_cmplx_mag_f32(sOutput, fftOutput, NPT);
-                // 找音量最高的频率
+                read_samples(px_pos_sa, pixel_window_sa);
+                fill_and_fft(pixel_window_sa);
                 find_fft_peak_ranged(96, 147, &ifreq, &vol); // 在这限制频率为1500Hz~2296.875Hz
-                freq = SAMPLE_FREQ_RES * ifreq;
+                freq = ifreq2freq(ifreq);
 
                 // 计算颜色值并写入缓冲区
                 // uint16_t *line_rgb_buf = (line_rgb_bufidx ? line_rgb_buf2 : line_rgb_buf1);
@@ -356,7 +319,7 @@ int sstv()
     // decode_matin1();
 
     wait_header();
-
+    samples_read = 0;
     mode = read_mode();
 
     for (i = 0; i < SSTV_MODE_INFO_COUNT; i++)
