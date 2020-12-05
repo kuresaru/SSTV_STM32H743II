@@ -6,10 +6,10 @@
 #include "pcm.h"
 #include "delay.h"
 #include "lcd.h"
+#include "vfd.h"
 
 #define SAMPLE_RATE 16000
 #define SAMPLE_10MS_CNT 160
-#define BUF40MS_SIZE (SAMPLE_10MS_CNT * 4)
 #define NPT 1024                 // 16 64 256 1024 4096
 // #define SAMPLE_FREQ_RES 7.8125
 #define SAMPLE_FREQ_RES 15.625
@@ -33,7 +33,7 @@ float32_t sInput[NPT];
 float32_t sOutput[NPT];
 float32_t fftOutput[NPT];
 
-int16_t buf40ms[BUF40MS_SIZE];
+int16_t buf10ms[SAMPLE_10MS_CNT];
 
 uint16_t line_rgb_buf1[320] __attribute__((section(".memd1base")));
 
@@ -55,7 +55,7 @@ static void find_fft_peak_ranged(u16 min, u16 max, u16 *ifreq, float32_t *vol)
 }
 
 static uint64_t samples_read = 0;
-static uint16_t last_samples_cnt = BUF40MS_SIZE;
+static uint16_t last_samples_cnt = SAMPLE_10MS_CNT;
 static void read_samples(uint64_t pos_sa, uint16_t samples_cnt)
 {
     int8_t start_offset_sa = pos_sa - samples_read; // 偏移量 正数需要跳过数据 负数需要倒回数据
@@ -75,12 +75,12 @@ static void read_samples(uint64_t pos_sa, uint16_t samples_cnt)
         // 使用上一次最后几个采样
         for (uint16_t i16 = 0; i16 < (-start_offset_sa); i16++)
         {
-            buf40ms[i16] = buf40ms[last_samples_cnt + start_offset_sa + i16];
+            buf10ms[i16] = buf10ms[last_samples_cnt + start_offset_sa + i16];
         }
         newread_sa = samples_cnt + start_offset_sa;
         newread_offset = (-start_offset_sa);
     }
-    read_pcm(buf40ms + newread_offset, newread_sa);
+    read_pcm(buf10ms + newread_offset, newread_sa);
     samples_read += newread_sa;
     last_samples_cnt = samples_cnt;
 }
@@ -91,7 +91,7 @@ static void fill_and_fft(uint16_t len)
     // 填充采样
     for (i16 = 0; i16 < len; i16++)
     {
-        sInput[i16] = hann(i16, len) * buf40ms[i16];
+        sInput[i16] = hann(i16, len) * buf10ms[i16];
     }
     for (i16 = len; i16 < NPT; i16++)
     {
@@ -110,7 +110,7 @@ static void read_10ms_fft_peak_freq(float32_t *freq, float32_t *vol)
     const u16 maxth = (NPT / 2) - 1;
     u16 ifreq;
     // 读10ms采样
-    read_pcm(buf40ms, SAMPLE_10MS_CNT);
+    read_pcm(buf10ms, SAMPLE_10MS_CNT);
     // 填充10ms采样 fft计算
     fill_and_fft(SAMPLE_10MS_CNT);
     // 找音量最高的频率
@@ -254,8 +254,7 @@ static void decode_matin1()
 
     // 开始解码
     read_samples(samples_read, SAMPLE_10MS_CNT * 3);
-    // seq_start_sa = samples_read;
-    // float32_t seq_start_fsa = seq_start_sa;
+    float32_t seq_start_fsa = seq_start_sa;
     for (line = 0; line < LINE_COUNT; line++)
     {
         printf("l%d\r\n", line);
@@ -266,7 +265,9 @@ static void decode_matin1()
                 // set start
                 if (line > 0)
                 {
-                    seq_start_sa += (uint64_t)round(LINE_TIME * SAMPLE_RATE);
+                    // seq_start_sa += (uint64_t)round(LINE_TIME * SAMPLE_RATE); // =7,143.1355472
+                    seq_start_fsa += LINE_TIME * SAMPLE_RATE; // =7,143.1355472
+                    seq_start_sa = (uint64_t)round(seq_start_fsa);
                 }
                 // TODO hsync
             }
@@ -281,7 +282,6 @@ static void decode_matin1()
                 freq = ifreq2freq(ifreq);
 
                 // 计算颜色值并写入缓冲区
-                // uint16_t *line_rgb_buf = (line_rgb_bufidx ? line_rgb_buf2 : line_rgb_buf1);
                 uint16_t *line_rgb_buf = line_rgb_buf1;
                 uint8_t lum = freq2lum(freq);
                 if (chan == 0)
@@ -298,12 +298,12 @@ static void decode_matin1()
                 }
             }
         }
-        // if (line == 1) { return; }
         // 当前行颜色写入屏幕
         for (i16 = 0; i16 < LINE_WIDTH; i16++)
         {
             LCD->LCD_RAM = line_rgb_buf1[i16];
         }
+        vfd_update_num(line + 1);
     }
 }
 

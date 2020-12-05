@@ -7,6 +7,7 @@
 #include "lcd.h"
 #include <stdio.h>
 #include "sstv.h"
+#include "vfd.h"
 
 // 好像内存必须在d1区域里才能连上dma
 u16 saiplaybuf[2] __attribute__((section(".memd1base"))) = {0X0000, 0X0000};
@@ -20,9 +21,11 @@ int main()
     MPU_Memory_Protection();
     lcd_init();
 
-    RCC->AHB4ENR |= 1 << 1;
-    GPIO_Set(GPIOB, PIN0 | PIN1, GPIO_MODE_OUT, GPIO_OTYPE_PP, GPIO_SPEED_MID, GPIO_PUPD_PU);
-    GPIOB->BSRR |= 0b11;
+    // RCC->AHB4ENR |= 1 << 1;
+    // GPIO_Set(GPIOB, PIN0 | PIN1, GPIO_MODE_OUT, GPIO_OTYPE_PP, GPIO_SPEED_MID, GPIO_PUPD_PU);
+    // GPIOB->BSRR |= 0b11;
+
+    vfd_init();
 
     WM8978_Init();
     WM8978_HPvol_Set(40, 40);
